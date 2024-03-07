@@ -9,9 +9,9 @@ import (
 )
 
 type Task struct {
-	taskId int64 // 任务ID
-	circle int64 // 当前的circle
-	job    func()
+	taskId string // 任务ID
+	circle int64  // 当前的circle
+	job    []func(taskID string)
 }
 
 type TimeWheel struct {
@@ -26,7 +26,7 @@ type TimeWheel struct {
 	interval time.Duration
 	stop     chan struct{}
 
-	taskMap map[int64]int64 // ["taskId":"pos"] ,任务以及对应的位置；
+	taskMap map[string]int64 // ["taskId":"pos"] ,任务以及对应的位置；
 }
 
 func NewTimeWheel(interval time.Duration, soltNum int64) *TimeWheel {
@@ -43,8 +43,8 @@ func NewTimeWheel(interval time.Duration, soltNum int64) *TimeWheel {
 		soltNum:   soltNum,
 		interval:  interval,
 		ticker:    ticker,
-		stop:      make(chan struct{}),
-		taskMap:   make(map[int64]int64),
+		stop:      make(chan struct{}, 1),
+		taskMap:   make(map[string]int64),
 	}
 }
 
@@ -75,14 +75,15 @@ func (t *TimeWheel) tick() {
 
 		n := e.Next()
 		t.solts[t.curPos].Remove(e)
+		delete(t.taskMap, x.taskId)
 		e = n
 
-		go x.job()
+		go x.job[0](x.taskId)
 	}
 
 }
 
-func (t *TimeWheel) AddTask(expired time.Duration, taskId int64, job func()) error {
+func (t *TimeWheel) AddTask(expired time.Duration, taskId string, jobs ...func(taskID string)) error {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
@@ -94,20 +95,23 @@ func (t *TimeWheel) AddTask(expired time.Duration, taskId int64, job func()) err
 	task := &Task{
 		taskId: taskId,
 		circle: circle,
-		job:    job,
+		job:    jobs,
 	}
 	insertInOrder(t.solts[pos], task)
 	t.taskMap[taskId] = pos
 	return nil
 }
 
-func (t *TimeWheel) StopTask(taskId int64) {
+func (t *TimeWheel) StopTask(taskId string) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	if pos, ok := t.taskMap[taskId]; ok {
 		for e := t.solts[pos].Front(); e != nil; e = e.Next() {
 			x := e.Value.(*Task)
 			if x.taskId == taskId {
+				if len(x.job) > 1 {
+					x.job[1](taskId)
+				}
 				t.solts[pos].Remove(e)
 				delete(t.taskMap, taskId)
 				return
@@ -117,7 +121,23 @@ func (t *TimeWheel) StopTask(taskId int64) {
 }
 
 func (t *TimeWheel) Stop() {
+	t.clear()
 	t.stop <- struct{}{}
+}
+
+func (t *TimeWheel) clear() {
+	for k, pos := range t.taskMap {
+		for e := t.solts[pos].Front(); e != nil; e = e.Next() {
+			x := e.Value.(*Task)
+			if x.taskId == k {
+				if len(x.job) > 1 {
+					x.job[1](k)
+				}
+				t.solts[pos].Remove(e)
+				delete(t.taskMap, k)
+			}
+		}
+	}
 }
 
 func (t *TimeWheel) multiColock(expired time.Duration) (int64, int64) {

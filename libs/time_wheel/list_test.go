@@ -52,7 +52,7 @@ func Test_insertInOrder(t *testing.T) {
 				l: emptyList,
 				task: &Task{
 					circle: 1,
-					job:    func() { panic("not implemented") },
+					job:    []func(string){func(string) {}, func(string) {}},
 				},
 			},
 			want:       []int64{1},
